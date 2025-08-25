@@ -1,0 +1,9 @@
+#PASO A PASO correr rviz2
+
+colcon build
+source install/setup.bash
+
+ros2 launch model_robot display.launch.py
+
+#animacion
+ros2 launch modelo_robot joint_publisher
