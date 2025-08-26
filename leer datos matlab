@@ -45,3 +45,54 @@ end
 fclose(fileID);
 clear s;
 disp('Recepción finalizada por Bluetooth.');
+
+
+#leer 1 dato
+
+clear;
+
+% === Configuración del puerto Bluetooth (ESP32 "velocista") ===
+comPort = 'COM5'; % <-- Cambia por el COM Bluetooth que aparece en tu PC
+baudRate = 115200; % Igual que en tu ESP32
+s = serialport(comPort, baudRate);
+
+% Configurar la terminación de línea
+configureTerminator(s, 'LF'); % '\n' esperado al final de cada dato enviado con SerialBT.println()
+
+% Abrir archivo para guardar datos
+fileID = fopen('C:\Users\juand\OneDrive\Documentos\MATLAB\8vo semestre\velocista\si.csv', 'w');
+
+disp('Conectado a ESP32 "velocista"... Recibiendo datos...');
+
+% === Bucle infinito de recepción ===
+while true
+    try
+        % Leer línea desde Bluetooth
+        dataLine = readline(s);
+        disp(['Valor recibido: ' dataLine]);  % Mostrar crudo
+
+        % Convertir a número
+        valor = str2double(dataLine);
+
+        % Validar y guardar
+        if ~isnan(valor)
+            fprintf(fileID, '%.4f\n', valor);
+        else
+            disp('Error en el formato del valor recibido.');
+        end
+    catch ME
+        disp('Error en la recepción de datos.');
+        disp(ME.message);
+    end
+end
+
+% === Al detener el programa (Ctrl+C) ===
+fclose(fileID);
+clear s;
+disp('Recepción finalizada por Bluetooth.');
+
+
+
+
+
+
