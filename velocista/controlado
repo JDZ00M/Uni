@@ -1,0 +1,179 @@
+#include <Arduino.h>
+#include "BluetoothSerial.h"
+
+BluetoothSerial SerialBT;
+
+// ==== Pines ====
+#define PWMA 21
+#define AIN2 19
+#define AIN1 18
+#define STBY 5
+#define BIN1 17
+#define BIN2 16
+#define PWMB 4
+
+#define S1 35
+#define S2 32
+#define S3 33
+#define S4 25
+#define S5 26
+#define S6 27
+#define S7 14
+#define S8 12
+
+// Canales PWM
+#define CH_A 0
+#define CH_B 1
+
+float S[8];
+float pos[8] = {-30, -20, -10, -5, 5, 10, 20, 30}; 
+
+// ==== Timers ====
+hw_timer_t * timer0 = NULL;   // solo genera bandera (5 ms)
+
+volatile bool flag_sample = false;  
+volatile float position = 0,diffPWM = 0; 
+volatile bool toggle=true;
+
+const int pwmBase =1500;
+float lastError = 0;
+const float q0= 31.99, q1= -20.28, s0= 0.0071;   // <<< tus constantes
+float lastDiffPWM = 0;
+
+
+
+
+// ==== ISR TIMER0 → Solo activa bandera ====
+void IRAM_ATTR onTimer0() {
+  flag_sample = true;
+}
+
+
+
+void setup() {
+  SerialBT.begin("velocista"); 
+
+  // Pines
+
+  pinMode(AIN1, OUTPUT);
+  pinMode(AIN2, OUTPUT);
+  pinMode(STBY, OUTPUT);
+  pinMode(BIN1, OUTPUT);
+  pinMode(BIN2, OUTPUT);
+  pinMode(S1, INPUT);
+  pinMode(S2, INPUT);
+  pinMode(S3, INPUT);
+  pinMode(S4, INPUT);
+  pinMode(S5, INPUT);
+  pinMode(S6, INPUT);
+  pinMode(S7, INPUT);
+  pinMode(S8, INPUT);
+
+  // PWM
+  ledcSetup(CH_A, 1000, 12);
+  ledcSetup(CH_B, 1000, 12);
+  ledcAttachPin(PWMA, CH_A);  
+  ledcAttachPin(PWMB, CH_B);
+
+  timer0 = timerBegin(0, 80, true);
+  timerAttachInterrupt(timer0, &onTimer0, true);
+  timerAlarmWrite(timer0, 5000, true);
+  timerAlarmEnable(timer0);
+
+  // Habilitar driver
+  ledcWrite(CH_A, 0);
+  ledcWrite(CH_B, 0);
+  digitalWrite(STBY, HIGH);
+}
+
+void loop() {
+  // Si se activó la bandera → leer sensores
+   if (flag_sample) {
+     flag_sample = false; // limpiar bandera
+     float cam=3.3/4096.0; 
+    // Leer sensores
+    S[0] = analogRead(S1)*cam; S[1] = analogRead(S2)*cam;
+    S[2] = analogRead(S3)*cam; S[3] = analogRead(S4)*cam;
+    S[4] = analogRead(S5)*cam; S[5] = analogRead(S6)*cam;
+    S[6] = analogRead(S7)*cam; S[7] = analogRead(S8)*cam;
+
+    // Calcular posición
+    float numerator = 0;
+    float denominator = 0;
+    for (int i = 0; i < 8; i++) {
+      numerator   += (float)S[i] * pos[i];
+      denominator += (float)S[i];
+    }
+
+    if (denominator != 0) {
+      position = numerator / denominator;
+    } else {
+      position = 0;
+    }
+
+    float angulo= (float)((3.6869*position) + 0.1707);
+    
+    float error = 0 - angulo;  // referencia = 0
+    float Uk = q0*error + q1*lastError + s0*lastDiffPWM;
+    lastError = error;
+
+    // Pasar a PWM (en % → rango 4095)
+    diffPWM = (Uk / 100.0) * 4095;
+    lastDiffPWM = diffPWM;
+
+    SerialBT.print(diffPWM);
+
+    // int pwmRight = pwmBase;
+    // int pwmLeft  = pwmBase;
+    int pwmRight = pwmBase-diffPWM/2;
+    int pwmLeft  = pwmBase+diffPWM/2;
+
+    // if (angulo > 0) {
+    //   // desviación a la derecha → corrige reduciendo motor izquierdo
+    //   pwmLeft = pwmBase - abs(diffPWM);
+    // } else if (angulo < 0) {
+    //   // desviación a la izquierda → corrige reduciendo motor derecho
+    //   pwmRight = pwmBase - abs(diffPWM);
+    // }
+
+    // Saturación
+    if (pwmLeft < 0) pwmLeft = 0;
+    if (pwmRight < 0) pwmRight = 0;
+    if (pwmLeft > 4095) pwmLeft = 4095;
+    if (pwmRight > 4095) pwmRight = 4095;
+
+    // Aplicar al puente H
+
+    
+    digitalWrite(AIN1, HIGH);
+    digitalWrite(AIN2, LOW);
+    digitalWrite(BIN1, HIGH);
+    digitalWrite(BIN2, LOW);
+
+    ledcWrite(CH_A, pwmRight);
+    ledcWrite(CH_B, pwmLeft);
+
+    // Debug
+    
+    SerialBT.print(",");
+    SerialBT.println(angulo);
+
+
+// int sensoresActivos = 0;
+// for (int i = 0; i < 8; i++) {
+//   // Umbral: ajusta según tu sensor (ej: 1.5 V ≈ línea negra detectada)
+//   if (S[i] > 3) {  
+//     sensoresActivos++;
+//   }
+// }
+
+// // Si SOLO 1 sensor detecta línea -> detener motores
+// if (sensoresActivos == 1 || sensoresActivos == 0) {
+//   ledcWrite(CH_A, 0);
+//   ledcWrite(CH_B, 0);
+//   return; // saltar esta iteración
+// }
+
+
+  }
+  }
