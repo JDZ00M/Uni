@@ -35,20 +35,18 @@ volatile bool flag_sample = false;
 volatile float position = 0,diffPWM = 0; 
 volatile bool toggle=true;
 
-const int pwmBase =1500;
-float lastError = 0;
-const float q0= 31.99, q1= -20.28, s0= 0.0071;   // <<< tus constantes
+const int pwmBase =1000;
+float lastError = 0; 
 float lastDiffPWM = 0;
+float lastUk = 0;
 
-
-
+const float q0= 31.99, q1= -20.28, s0= 0.0071;  
+const float K=17.3448, alpha=0.8991 ,beta=0.6461;
 
 // ==== ISR TIMER0 → Solo activa bandera ====
 void IRAM_ATTR onTimer0() {
   flag_sample = true;
 }
-
-
 
 void setup() {
   SerialBT.begin("velocista"); 
@@ -112,16 +110,17 @@ void loop() {
     }
 
     float angulo= (float)((3.6869*position) + 0.1707);
-    
     float error = 0 - angulo;  // referencia = 0
-    float Uk = q0*error + q1*lastError + s0*lastDiffPWM;
-    lastError = error;
 
+    float Uk = q0*error + q1*lastError + s0*lastUk;
+    //float Uk= K*error-K*alpha*lastError+beta*lastUk;
+    lastError = error;
+    lastUk=Uk;
     // Pasar a PWM (en % → rango 4095)
     diffPWM = (Uk / 100.0) * 4095;
-    lastDiffPWM = diffPWM;
+    // lastDiffPWM = diffPWM;
 
-    SerialBT.print(diffPWM);
+    SerialBT.print(Uk);
 
     // int pwmRight = pwmBase;
     // int pwmLeft  = pwmBase;
