@@ -1,0 +1,6 @@
+PD FINO
+
+q0=60.1899 , q1=-40.7904 , s0=-0.0368 
+const int pwmBase =2050;
+zeta = 0.9;
+ts = 0.08;
