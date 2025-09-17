@@ -9,5 +9,9 @@ source install/setup.bash
 
 ros2 launch modelo_robot display.launch.py
 
+colcon build --merge-install --packages-select rasbot_gazebo --cmake-clean-cache
+source install/setup.bash
+ros2 launch rasbot_gazebo rasbot_gz.launch.py
+
 #animacion
 ros2 launch modelo_robot joint_publisher
