@@ -13,5 +13,19 @@ colcon build --merge-install --packages-select rasbot_gazebo --cmake-clean-cache
 source install/setup.bash
 ros2 launch rasbot_gazebo rasbot_gz.launch.py
 
-#animacion
-ros2 launch modelo_robot joint_publisher
+# por si acaso
+
+    # 3) robot_state_publisher
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    rsp_frequency = LaunchConfiguration('rsp_frequency')
+    ld.add_action( Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='robot_state_publisher',
+        output='both',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'publish_frequency': rsp_frequency,
+            'robot_description': get_robot_description(),
+        }],
+    ) )
