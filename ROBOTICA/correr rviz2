@@ -13,19 +13,87 @@ colcon build --merge-install --packages-select rasbot_gazebo --cmake-clean-cache
 source install/setup.bash
 ros2 launch rasbot_gazebo rasbot_gz.launch.py
 
-# por si acaso
 
-    # 3) robot_state_publisher
-    use_sim_time = LaunchConfiguration('use_sim_time')
-    rsp_frequency = LaunchConfiguration('rsp_frequency')
-    ld.add_action( Node(
-        package='robot_state_publisher',
-        executable='robot_state_publisher',
-        name='robot_state_publisher',
-        output='both',
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'publish_frequency': rsp_frequency,
-            'robot_description': get_robot_description(),
-        }],
-    ) )
+
+####
+
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+import numpy as np
+
+class TrajectoryVisualizer(Node):
+    def __init__(self):
+        super().__init__('trajectory_visualizer')
+        self.publisher_ = self.create_publisher(JointState, '/joint_states', 10)
+        
+        # 🔹 Nombres de los joints (ajústalos a los de tu URDF)
+        self.joint_names = [
+            'joint1',
+            'joint2',
+            'joint3',
+            'joint4',
+            'joint5',
+            'joint6'
+        ]
+        
+        # 🔹 DEFINE TU TRAYECTORIA AQUÍ
+        # Cada fila = 1 joint, cada columna = 1 instante de tiempo
+        q = np.array([
+            [-2.6176,-2.4388,-2.1683,-1.8592,-1.5503,-1.3120,-1.1417,-1.0164,-0.9227,-0.8502,-0.7927,-0.722891],
+            [0.0643,0.4261,0.5576,0.6767,0.6892,0.5666,0.2871,-0.1078,-0.4854,-0.7987,-1.0883,-1.13811],
+            [-0.8709,-1.5151,-1.7453,-2.0289,-2.2433,-2.3928,-2.4465,-2.3742,-2.1906,-1.9448,-1.6447,0.0197941-3.14/2],
+            [0.0000,-0.0202,-0.0615,-0.1149,-0.1716,-0.2135,-0.2393,-0.2528,-0.2576,-0.2578,-0.2550,0.900084],
+            [0.8067,0.9271,0.9494,0.9692,0.9755,0.9637,0.9279,0.8761,0.8343,0.8073,0.7849,1.27737],
+            [-0.5240,-0.5240,-0.5240,-0.5240,-0.5240,-0.5240,-0.5240,-0.5240,-0.5240,-0.5240,-0.5240,-1.92037]
+        ])
+        
+        self.trajectory = q
+        self.index = 0
+        self.total_steps = self.trajectory.shape[1]  # Número de columnas (pasos)
+        
+        # 🔹 Frecuencia de publicación
+        self.timer = self.create_timer(0.5, self.timer_callback)  # 10 Hz
+        
+        self.get_logger().info(f'Trayectoria cargada: {self.total_steps} puntos')
+        self.get_logger().info(f'Dimensiones: {self.trajectory.shape[0]} joints × {self.trajectory.shape[1]} pasos')
+    
+    def timer_callback(self):
+        if self.index < self.total_steps:
+            msg = JointState()
+            msg.name = self.joint_names
+            
+            # 🔹 Extraer columna (todos los joints en ese instante)
+            msg.position = self.trajectory[:, self.index].tolist()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            
+            self.publisher_.publish(msg)
+            
+            # Log cada 10 pasos para no saturar
+            if self.index % 10 == 0:
+                self.get_logger().info(
+                    f'Paso {self.index + 1}/{self.total_steps} | '
+                    f'Progreso: {100 * (self.index + 1) / self.total_steps:.1f}%'
+                )
+            
+            self.index += 1
+            
+        else:
+            self.get_logger().info('✅ Trayectoria completada')
+            # Opción: reiniciar o detener
+            # self.index = 0  # Descomentar para loop infinito
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = TrajectoryVisualizer()
+    
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
