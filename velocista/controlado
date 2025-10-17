@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include "BluetoothSerial.h"
-
+#include <math.h>
 BluetoothSerial SerialBT;
 
 // ==== Pines ====
@@ -29,21 +29,23 @@ float S[8];
 float pos[8] = {-30, -20, -10, -5, 5, 10, 20, 30}; 
 
 // ==== Timers ====
-hw_timer_t * timer0 = NULL;   // solo genera bandera (5 ms)
+hw_timer_t * timer0 = NULL;   
 
 volatile bool flag_sample = false;  
 volatile float position = 0,diffPWM = 0; 
 volatile bool toggle=true;
 
-const int pwmBase =1000;
+int pwmBase =1800;
+int pwmBaseMin=1600, pwmBaseMax=2400;
 float lastError = 0; 
 float lastDiffPWM = 0;
-float lastUk = 0;
+float lastUk = 0,lastUk2=0;
 
-const float q0= 31.99, q1= -20.28, s0= 0.0071;  
-const float K=17.3448, alpha=0.8991 ,beta=0.6461;
+const float 
+q0=115.8564 , q1=-70.1983 , s0=-0.0979         ,    // PD CON FILTRO 
+K=54.9747 , alpha_lgr=0.7266 , beta=0.4365    ,    // COMPENSADOR
+K_db= 0.0188, m1=0.6037 , a1=0.3963,alpha=0.2788    ;
 
-// ==== ISR TIMER0 → Solo activa bandera ====
 void IRAM_ATTR onTimer0() {
   flag_sample = true;
 }
@@ -109,41 +111,38 @@ void loop() {
       position = 0;
     }
 
-    float angulo= (float)((3.6869*position) + 0.1707);
-    float error = 0 - angulo;  // referencia = 0
-
-    float Uk = q0*error + q1*lastError + s0*lastUk;
-    //float Uk= K*error-K*alpha*lastError+beta*lastUk;
-    lastError = error;
-    lastUk=Uk;
-    // Pasar a PWM (en % → rango 4095)
-    diffPWM = (Uk / 100.0) * 4095;
-    // lastDiffPWM = diffPWM;
-
-    SerialBT.print(Uk);
-
-    // int pwmRight = pwmBase;
-    // int pwmLeft  = pwmBase;
-    int pwmRight = pwmBase-diffPWM/2;
-    int pwmLeft  = pwmBase+diffPWM/2;
-
-    // if (angulo > 0) {
-    //   // desviación a la derecha → corrige reduciendo motor izquierdo
-    //   pwmLeft = pwmBase - abs(diffPWM);
-    // } else if (angulo < 0) {
-    //   // desviación a la izquierda → corrige reduciendo motor derecho
-    //   pwmRight = pwmBase - abs(diffPWM);
-    // }
-
-    // Saturación
-    if (pwmLeft < 0) pwmLeft = 0;
-    if (pwmRight < 0) pwmRight = 0;
-    if (pwmLeft > 4095) pwmLeft = 4095;
-    if (pwmRight > 4095) pwmRight = 4095;
-
-    // Aplicar al puente H
+    float angulo= (float)((2.48442*position) + 0.01062);
 
     
+    float error = 0 - angulo;  // referencia = 0
+
+   //pwmBase = pwmBaseMin + (pwmBaseMax - pwmBaseMin) * exp(-abs(error)*1.6);
+
+    // PD CON FILTRO
+    float Uk = q0*error + q1*lastError + s0*lastUk;
+    
+    // COMPENSADOR
+    //float Uk= K*error-K*alpha_lgr*lastError+beta*lastUk;
+
+    // DEAD BEAT
+    //float Uk = (m1/K_db) *error - (m1/K_db)*alpha*lastError - a1*lastUk ;
+
+    lastError = error;
+    lastUk=Uk;
+
+    diffPWM = (Uk / 100.0) * 4095;
+
+
+    int pwmRight, pwmLeft;
+
+    pwmRight = pwmBase-diffPWM/2;
+    pwmLeft  = pwmBase+diffPWM/2;
+
+
+    pwmRight = constrain(pwmRight, 0, 4095);
+    pwmLeft  = constrain(pwmLeft, 0, 4095);
+
+
     digitalWrite(AIN1, HIGH);
     digitalWrite(AIN2, LOW);
     digitalWrite(BIN1, HIGH);
@@ -153,26 +152,9 @@ void loop() {
     ledcWrite(CH_B, pwmLeft);
 
     // Debug
-    
-    SerialBT.print(",");
-    SerialBT.println(angulo);
-
-
-// int sensoresActivos = 0;
-// for (int i = 0; i < 8; i++) {
-//   // Umbral: ajusta según tu sensor (ej: 1.5 V ≈ línea negra detectada)
-//   if (S[i] > 3) {  
-//     sensoresActivos++;
-//   }
-// }
-
-// // Si SOLO 1 sensor detecta línea -> detener motores
-// if (sensoresActivos == 1 || sensoresActivos == 0) {
-//   ledcWrite(CH_A, 0);
-//   ledcWrite(CH_B, 0);
-//   return; // saltar esta iteración
-// }
-
+     SerialBT.print(error);
+     SerialBT.print("  ,  ");
+    SerialBT.println(Uk);
 
   }
-  }
+}
