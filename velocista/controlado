@@ -1,160 +1,300 @@
-#include <Arduino.h>
-#include "BluetoothSerial.h"
-#include <math.h>
-BluetoothSerial SerialBT;
+  #include <Arduino.h>
+  #include "BluetoothSerial.h"
+  #include <math.h>
+  #include <IRremote.hpp>
+  BluetoothSerial SerialBT;
 
-// ==== Pines ====
-#define PWMA 21
-#define AIN2 19
-#define AIN1 18
-#define STBY 5
-#define BIN1 17
-#define BIN2 16
-#define PWMB 4
+  // ==== Pines ====
+  #define PWMA 21
+  #define AIN2 19
+  #define AIN1 18
+  #define STBY 5
+  #define BIN1 17
+  #define BIN2 16
+  #define PWMB 4
+  #define S1 35
+  #define S2 32
+  #define S3 33
+  #define S4 25
+  #define S5 26
+  #define S6 27
+  #define S7 14
+  #define S8 12
+  #define IR_PIN 23
+  #define CH_A 0
+  #define CH_B 1
 
-#define S1 35
-#define S2 32
-#define S3 33
-#define S4 25
-#define S5 26
-#define S6 27
-#define S7 14
-#define S8 12
+  float cam=3.3/4096.0; 
+  float S[8];
+  float pos[8] = {-30, -20, -10, -5, 5, 10, 20, 30}; 
 
-// Canales PWM
-#define CH_A 0
-#define CH_B 1
+  int sensorMin[8],sensorMax[8];
 
-float S[8];
-float pos[8] = {-30, -20, -10, -5, 5, 10, 20, 30}; 
+  // ==== Timers ====
+  hw_timer_t * timer0 = NULL;   
 
-// ==== Timers ====
-hw_timer_t * timer0 = NULL;   
+  volatile bool flag_sample = false;  
+  volatile float position = 0,diffPWM = 0; 
+  volatile bool toggle=true;
 
-volatile bool flag_sample = false;  
-volatile float position = 0,diffPWM = 0; 
-volatile bool toggle=true;
+  bool activo = false;  // <--- bandera para activar el seguidor
+  const uint32_t CODIGO_ACTIVAR = 0xEA15E708; // tu código IR
 
-int pwmBase =1800;
-int pwmBaseMin=1600, pwmBaseMax=2400;
-float lastError = 0; 
-float lastDiffPWM = 0;
-float lastUk = 0,lastUk2=0;
+  int pwmBase =1500;
+  int pwmBaseMin=2900 , pwmBaseMax=3300;
+  float lastError = 0; 
+  float lastDiffPWM = 0;
+  float lastUk = 0,lastUk2=0;
 
-const float 
-q0=115.8564 , q1=-70.1983 , s0=-0.0979         ,    // PD CON FILTRO 
-K=54.9747 , alpha_lgr=0.7266 , beta=0.4365    ,    // COMPENSADOR
-K_db= 0.0188, m1=0.6037 , a1=0.3963,alpha=0.2788    ;
+  const float 
 
-void IRAM_ATTR onTimer0() {
-  flag_sample = true;
-}
+ // q0=39.4757 , q1=-25.1814 , s0=-0.0033 ,
+  //q0=78.3222 , q1=-46.3876 , s0=-0.0476,   
+  q0=28.8744 , q1=-16.9423 , s0=0.0144,  
+  K=54.9747 , alpha_lgr=0.7266 , beta=0.4365,    
+  K_db=0.0188, m1=0.6037 , a1=0.3963, alpha=0.2788;
 
-void setup() {
-  SerialBT.begin("velocista"); 
+  void IRAM_ATTR onTimer0() {
+    flag_sample = true;
+  }
 
-  // Pines
 
-  pinMode(AIN1, OUTPUT);
-  pinMode(AIN2, OUTPUT);
-  pinMode(STBY, OUTPUT);
-  pinMode(BIN1, OUTPUT);
-  pinMode(BIN2, OUTPUT);
-  pinMode(S1, INPUT);
-  pinMode(S2, INPUT);
-  pinMode(S3, INPUT);
-  pinMode(S4, INPUT);
-  pinMode(S5, INPUT);
-  pinMode(S6, INPUT);
-  pinMode(S7, INPUT);
-  pinMode(S8, INPUT);
 
-  // PWM
-  ledcSetup(CH_A, 1000, 12);
-  ledcSetup(CH_B, 1000, 12);
-  ledcAttachPin(PWMA, CH_A);  
-  ledcAttachPin(PWMB, CH_B);
+  void calibrarSensores() {
+  Serial.println("=== Iniciando calibración automática ===");
 
-  timer0 = timerBegin(0, 80, true);
-  timerAttachInterrupt(timer0, &onTimer0, true);
-  timerAlarmWrite(timer0, 5000, true);
-  timerAlarmEnable(timer0);
+  // 1. Inicializar límites
+  for (int i = 0; i < 8; i++) {
+    sensorMin[i] = 4095;
+    sensorMax[i] = 0;
+  }
 
-  // Habilitar driver
+
+  int pwmCal = 800; // velocidad moderada para calibrar
+  const int muestrasTotales = 100;
+
+  Serial.println("→ Girando y calibrando...");
+
+  // 3. Bucle de calibración
+  for (int muestra = 0; muestra < muestrasTotales; muestra++) {
+
+    // --- Sentido de giro según la muestra ---
+    if (muestra < 50) {
+      // primeras 50 muestras → gira a la izquierda
+      digitalWrite(AIN1, LOW);
+      digitalWrite(AIN2, HIGH);
+      digitalWrite(BIN1, HIGH);
+      digitalWrite(BIN2, LOW);
+    } else {
+      // últimas 50 muestras → gira a la derecha
+      digitalWrite(AIN1, HIGH);
+      digitalWrite(AIN2, LOW);
+      digitalWrite(BIN1, LOW);
+      digitalWrite(BIN2, HIGH);
+    }
+
+    // aplicar PWM
+    ledcWrite(CH_A, pwmCal);
+    ledcWrite(CH_B, pwmCal);
+
+    // --- Leer sensores y actualizar min/max ---
+    for (int i = 0; i < 8; i++) {
+      int lectura = analogRead(S[i])*cam;
+      if (lectura < sensorMin[i]) sensorMin[i] = lectura;
+      if (lectura > sensorMax[i]) sensorMax[i] = lectura;
+    }
+
+    delay(20); // tiempo entre muestras (~2s total)
+  }
+
+  // 4. Detener motores
   ledcWrite(CH_A, 0);
   ledcWrite(CH_B, 0);
-  digitalWrite(STBY, HIGH);
+  digitalWrite(AIN1, LOW);
+  digitalWrite(AIN2, LOW);
+  digitalWrite(BIN1, LOW);
+  digitalWrite(BIN2, LOW);
 }
 
-void loop() {
-  // Si se activó la bandera → leer sensores
-   if (flag_sample) {
-     flag_sample = false; // limpiar bandera
-     float cam=3.3/4096.0; 
-    // Leer sensores
-    S[0] = analogRead(S1)*cam; S[1] = analogRead(S2)*cam;
-    S[2] = analogRead(S3)*cam; S[3] = analogRead(S4)*cam;
-    S[4] = analogRead(S5)*cam; S[5] = analogRead(S6)*cam;
-    S[6] = analogRead(S7)*cam; S[7] = analogRead(S8)*cam;
-
-    // Calcular posición
-    float numerator = 0;
-    float denominator = 0;
-    for (int i = 0; i < 8; i++) {
-      numerator   += (float)S[i] * pos[i];
-      denominator += (float)S[i];
-    }
-
-    if (denominator != 0) {
-      position = numerator / denominator;
-    } else {
-      position = 0;
-    }
-
-    float angulo= (float)((2.48442*position) + 0.01062);
-
-    
-    float error = 0 - angulo;  // referencia = 0
-
-   //pwmBase = pwmBaseMin + (pwmBaseMax - pwmBaseMin) * exp(-abs(error)*1.6);
-
-    // PD CON FILTRO
-    float Uk = q0*error + q1*lastError + s0*lastUk;
-    
-    // COMPENSADOR
-    //float Uk= K*error-K*alpha_lgr*lastError+beta*lastUk;
-
-    // DEAD BEAT
-    //float Uk = (m1/K_db) *error - (m1/K_db)*alpha*lastError - a1*lastUk ;
-
-    lastError = error;
-    lastUk=Uk;
-
-    diffPWM = (Uk / 100.0) * 4095;
 
 
-    int pwmRight, pwmLeft;
+  void setup() {
+    SerialBT.begin("velocista"); 
+    IrReceiver.begin(IR_PIN, DISABLE_LED_FEEDBACK);
 
-    pwmRight = pwmBase-diffPWM/2;
-    pwmLeft  = pwmBase+diffPWM/2;
+    // Pines
+    pinMode(AIN1, OUTPUT);
+    pinMode(AIN2, OUTPUT);
+    pinMode(STBY, OUTPUT);
+    pinMode(BIN1, OUTPUT);
+    pinMode(BIN2, OUTPUT);
+    pinMode(S1, INPUT);
+    pinMode(S2, INPUT);
+    pinMode(S3, INPUT);
+    pinMode(S4, INPUT);
+    pinMode(S5, INPUT);
+    pinMode(S6, INPUT);
+    pinMode(S7, INPUT);
+    pinMode(S8, INPUT);
 
+    // PWM
+    ledcSetup(CH_A, 1000, 12);
+    ledcSetup(CH_B, 1000, 12);
+    ledcAttachPin(PWMA, CH_A);  
+    ledcAttachPin(PWMB, CH_B);
 
-    pwmRight = constrain(pwmRight, 0, 4095);
-    pwmLeft  = constrain(pwmLeft, 0, 4095);
+    timer0 = timerBegin(0, 80, true);
+    timerAttachInterrupt(timer0, &onTimer0, true);
+    timerAlarmWrite(timer0, 5000, true);
+    timerAlarmEnable(timer0);
 
+    ledcWrite(CH_A, 0);
+    ledcWrite(CH_B, 0);
+    digitalWrite(STBY, HIGH);
 
-    digitalWrite(AIN1, HIGH);
-    digitalWrite(AIN2, LOW);
-    digitalWrite(BIN1, HIGH);
-    digitalWrite(BIN2, LOW);
-
-    ledcWrite(CH_A, pwmRight);
-    ledcWrite(CH_B, pwmLeft);
-
-    // Debug
-     SerialBT.print(error);
-     SerialBT.print("  ,  ");
-    SerialBT.println(Uk);
-
+   // calibrarSensores();
   }
+
+  void loop() {
+    
+    if (IrReceiver.decode()) {
+      uint32_t codigo = IrReceiver.decodedIRData.decodedRawData;
+      if (codigo == CODIGO_ACTIVAR) {
+        activo = !activo;  // alterna ON/OFF
+        SerialBT.print("Estado cambiado -> ");
+        SerialBT.println(activo ? "ACTIVO" : "DETENIDO");
+      }
+      IrReceiver.resume();
+    }
+
+    if (flag_sample) {
+      flag_sample = false; // limpiar bandera
+  
+      S[0] = analogRead(S1)*cam; S[1] = analogRead(S2)*cam; S[2] = analogRead(S3)*cam; S[3] = analogRead(S4)*cam; S[4] = analogRead(S5)*cam; S[5] = analogRead(S6)*cam; S[6] = analogRead(S7)*cam; S[7] = analogRead(S8)*cam;
+
+      int activos = 0;
+      int idxActivo = -1;
+      for (int i = 0; i < 8; i++) {
+        if (S[i] > 3.0) {  
+        activos++;
+        idxActivo = i;
+        }
+      }
+      
+      // float numerator = 0;
+      // float denominator = 0;
+      // for (int i = 0; i < 8; i++) {
+      //   numerator   += (float)S[i] * pos[i];
+      //   denominator += (float)S[i];
+      // }
+
+      // if (denominator != 0) {
+      //   position = numerator / denominator;
+      // } else {
+      //   position = 0;
+      // }
+      
+    
+      if (activos == 1) {
+      if (idxActivo == 0) position = -3.5;   // extremo izquierdo
+      else if (idxActivo == 7) position = 3.5; // extremo derecho
+     } 
+      else if (activos == 0) {
+        // lo manejamos en el punto 2
+      } 
+      else {
+        // promedio normal
+        float numerator = 0, denominator = 0;
+        for (int i = 0; i < 8; i++) {
+          numerator   += (float) S[i] * pos[i];
+          denominator += (float) S[i];
+        }
+        if (denominator != 0) position = numerator / denominator;
+      }
+
+            
+
+
+      
+      float angulo= (float)((2.48442*position) + 0.01062);
+      //float angulo= (float)((3.6869*position) + 0.1707);
+      float error = 0 - angulo; 
+
+      float Uk = q0*error + q1*lastError + s0*lastUk;
+      
+      //float Uk= K*error-K*alpha_lgr*lastError+beta*lastUk;
+
+      lastError = error;
+      lastUk=Uk;
+
+      diffPWM = (Uk / 100.0) * 4095;
+
+      int pwmRight, pwmLeft;
+
+     // --- Cálculo de PWM base ---
+pwmRight = pwmBase - diffPWM;
+pwmLeft  = pwmBase + diffPWM;
+
+// --- Control de dirección según signo ---
+if (pwmRight >= 0) {
+  // motor A hacia adelante
+  digitalWrite(AIN1, HIGH);
+  digitalWrite(AIN2, LOW);
+} else {
+  // motor A hacia atrás
+  digitalWrite(AIN1, LOW);
+  digitalWrite(AIN2, HIGH);
+  pwmRight = -pwmRight; // usa el valor absoluto
 }
+
+if (pwmLeft >= 0) {
+  // motor B hacia adelante
+  digitalWrite(BIN1, HIGH);
+  digitalWrite(BIN2, LOW);
+} else {
+  // motor B hacia atrás
+  digitalWrite(BIN1, LOW);
+  digitalWrite(BIN2, HIGH);
+  pwmLeft = -pwmLeft; // valor absoluto
+}
+
+// --- Limitar PWM al rango permitido ---
+pwmRight = constrain(pwmRight, 0, 4095);
+pwmLeft  = constrain(pwmLeft, 0, 4095);
+
+// --- Enviar señal PWM a los canales ---
+// ledcWrite(CH_A, pwmRight);
+// ledcWrite(CH_B, pwmLeft);
+
+
+ledcWrite(CH_A, pwmRight);
+ledcWrite(CH_B, pwmLeft);
+
+      // Debug
+      SerialBT.print(error);
+      SerialBT.print("  ,  ");
+      SerialBT.println(Uk);
+
+
+
+    // pwmBase = pwmBaseMin + (pwmBaseMax - pwmBaseMin) * exp(-abs(error)*1.5);
+    }
+  }
+
+
+// #include <Arduino.h>
+// #include <IRremote.hpp>
+
+// #define IR_RECEIVE_PIN 23
+
+// void setup() {
+//   Serial.begin(115200);
+// }
+
+// void loop() {
+//   if (IrReceiver.decode()) {
+//     Serial.println(IrReceiver.decodedIRData.decodedRawData, HEX);
+//     IrReceiver.resume();
+//   }
+// }
+
